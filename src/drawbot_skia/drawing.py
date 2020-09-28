@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import math
 import skia
 from .document import RecordingDocument
@@ -72,11 +73,19 @@ class Drawing:
     def drawPath(self, path):
         self._drawItem(self._canvas.drawPath, path.path)
 
+    def clipPath(self, path):
+        self._canvas.clipPath(path.path, doAntiAlias=True)
+
     def fill(self, *args):
         self._gstate.setFillColor(_colorArgs(args))
 
     def stroke(self, *args):
         self._gstate.setStrokeColor(_colorArgs(args))
+
+    def blendMode(self, blendMode):
+        if blendMode not in _blendModes:
+            raise DrawbotError(f"blendMode must be one of: {_blendModesList}")
+        self._gstate.setBlendMode(blendMode)
 
     def strokeWidth(self, value):
         self._gstate.setStrokeWidth(value)
@@ -86,6 +95,12 @@ class Drawing:
 
     def lineJoin(self, lineJoin):
         self._gstate.setLineJoin(lineJoin)
+
+    def lineDash(self, firstValue=None, *values):
+        if firstValue is None:
+            if values:
+                raise TypeError("lineDash() argument(s) should be None, or one or more numbers")
+        self._gstate.setLineDash(firstValue, *values)
 
     def miterLimit(self, miterLimit):
         self._gstate.setMiterLimit(miterLimit)
@@ -104,6 +119,9 @@ class Drawing:
     def fontVariations(self, *, resetVariations=False, **variations):
         return self._gstate.setFontVariations(variations, resetVariations)
 
+    def language(self, language):
+        return self._gstate.setLanguage(language)
+
     def textSize(self, txt):
         # TODO: with some smartness we can shape only once, for a
         # textSize()/text() call combination with the same text and
@@ -118,18 +136,9 @@ class Drawing:
             return
 
         glyphsInfo = self._gstate.textStyle.shape(txt)
-        builder = skia.TextBlobBuilder()
-        builder.allocRunPos(self._gstate.textStyle.skFont, glyphsInfo.gids, glyphsInfo.positions)
-        blob = builder.make()
+        blob = self._gstate.textStyle.makeTextBlob(glyphsInfo, align)
 
         x, y = position
-        textWidth = glyphsInfo.endPos[0]
-        if align is None:
-            align = "left" if not glyphsInfo.baseLevel else "right"
-        if align == "right":
-            x -= textWidth
-        elif align == "center":
-            x -= textWidth / 2
 
         self._canvas.save()
         try:
@@ -139,6 +148,28 @@ class Drawing:
             self._drawItem(self._canvas.drawTextBlob, blob, 0, 0)
         finally:
             self._canvas.restore()
+
+    def image(self, imagePath, position, alpha=1.0):
+        im = self._getImage(imagePath)
+        paint = skia.Paint()
+        if alpha != 1.0:
+            paint.setAlpha(round(alpha * 255))
+        if self._gstate.fillPaint.blendMode != "normal":
+            paint.setBlendMode(self._gstate.fillPaint.skPaint.getBlendMode())
+        x, y = position
+        self._canvas.save()
+        try:
+            self._canvas.translate(x, y + im.height())
+            if self._flipCanvas:
+                self._canvas.scale(1, -1)
+            self._canvas.drawImage(im, 0, 0, paint)
+        finally:
+            self._canvas.restore()
+
+    @staticmethod
+    @functools.lru_cache(maxsize=32)
+    def _getImage(imagePath):
+        return skia.Image.open(imagePath)
 
     def translate(self, x, y):
         self._canvas.translate(x, y)
@@ -220,3 +251,37 @@ def _colorArgs(args):
     else:
         assert 0
     return tuple(min(255, max(0, round(v * 255))) for v in (alpha, r, g, b))
+
+
+_blendModesList = [
+    'normal',
+    'multiply',
+    'screen',
+    'overlay',
+    'darken',
+    'lighten',
+    'colorDodge',
+    'colorBurn',
+    'softLight',
+    'hardLight',
+    'difference',
+    'exclusion',
+    'hue',
+    'saturation',
+    'color',
+    'luminosity',
+    'clear',
+    'copy',
+    'sourceIn',
+    'sourceOut',
+    'sourceAtop',
+    'destinationOver',
+    'destinationIn',
+    'destinationOut',
+    'destinationAtop',
+    'xOR',
+    'plusDarker',
+    'plusLighter',
+]
+
+_blendModes = set(_blendModesList)

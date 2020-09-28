@@ -56,6 +56,10 @@ class GraphicsState:
         else:
             self.strokePaint = self.strokePaint.copy(color=color, somethingToDraw=True)
 
+    def setBlendMode(self, blendMode):
+        self.fillPaint = self.fillPaint.copy(blendMode=blendMode)
+        self.strokePaint = self.strokePaint.copy(blendMode=blendMode)
+
     def setStrokeWidth(self, strokeWidth):
         self.strokePaint = self.strokePaint.copy(strokeWidth=strokeWidth)
 
@@ -64,6 +68,13 @@ class GraphicsState:
 
     def setLineJoin(self, lineJoin):
         self.strokePaint = self.strokePaint.copy(lineJoin=lineJoin)
+
+    def setLineDash(self, firstValue, *values):
+        if firstValue is None:
+            assert not values
+            self.strokePaint = self.strokePaint.copy(lineDash=None)
+        else:
+            self.strokePaint = self.strokePaint.copy(lineDash=(firstValue,) + values)
 
     def setMiterLimit(self, miterLimit):
         self.strokePaint = self.strokePaint.copy(miterLimit=miterLimit)
@@ -94,6 +105,9 @@ class GraphicsState:
         self.textStyle = self.textStyle.copy(variations=currentVariations)
         return currentVariations
 
+    def setLanguage(self, language):
+        self.textStyle = self.textStyle.copy(language=language)
+
 
 class _ImmutableContainer:
 
@@ -122,15 +136,20 @@ class FillPaint(_ImmutableContainer):
 
     somethingToDraw = True
     color = (255, 0, 0, 0)  # ARGB
+    blendMode = "normal"
 
     @cached_property
     def skPaint(self):
+        return self._makePaint(skia.Paint.kFill_Style)
+
+    def _makePaint(self, style):
         paint = skia.Paint(
             Color=0,
             AntiAlias=True,
-            Style=skia.Paint.kFill_Style,
+            Style=style,
         )
         paint.setARGB(*self.color)
+        paint.setBlendMode(_blendModeMapping[self.blendMode])
         return paint
 
 
@@ -140,19 +159,22 @@ class StrokePaint(FillPaint):
     strokeWidth = 1
     lineCap = "butt"
     lineJoin = "miter"
+    lineDash = None
 
     @cached_property
     def skPaint(self):
-        paint = skia.Paint(
-            Color=0,
-            AntiAlias=True,
-            Style=skia.Paint.kStroke_Style,
-        )
-        paint.setARGB(*self.color)
+        paint = self._makePaint(skia.Paint.kStroke_Style)
         paint.setStrokeMiter(self.miterLimit)
         paint.setStrokeWidth(self.strokeWidth)
         paint.setStrokeCap(_strokeCapMapping[self.lineCap])
         paint.setStrokeJoin(_strokeJoinMapping[self.lineJoin])
+        if self.lineDash is not None:
+            intervals = self.lineDash
+            if len(intervals) % 2:
+                # Skia requires the intervals list to be of even length;
+                # doubling the list matches macOS/CoreGraphics behavior
+                intervals = intervals * 2
+            paint.setPathEffect(skia.DashPathEffect.Make(intervals, 0))
         return paint
 
 
@@ -168,12 +190,51 @@ _strokeJoinMapping = dict(
     bevel=skia.Paint.Join.kBevel_Join,
 )
 
+# NOTE: 'plusDarker' is missing
+_blendModeMapping = {
+    "softLight": skia.BlendMode.kSoftLight,  # lighten or darken, depending on source
+    "destinationOut": skia.BlendMode.kDstOut,  # destination trimmed outside source
+    "clear": skia.BlendMode.kClear,  # replaces destination with zero: fully transparent
+    "sourceIn": skia.BlendMode.kSrcIn,  # source trimmed inside destination
+    "destinationOver": skia.BlendMode.kDstOver,  # destination over source
+    "hardLight": skia.BlendMode.kHardLight,  # multiply or screen, depending on source
+    # "???": skia.BlendMode.kDst,  # preserves destination
+    "xOR": skia.BlendMode.kXor,  # each of source and destination trimmed outside the other
+    "hue": skia.BlendMode.kHue,  # hue of source with saturation and luminosity of destination
+    "screen": skia.BlendMode.kScreen,  # multiply inverse of pixels, inverting result; brightens destination
+    # "???": skia.BlendMode.kLastMode,  # last valid value
+    "difference": skia.BlendMode.kDifference,  # subtract darker from lighter with higher contrast
+    "overlay": skia.BlendMode.kOverlay,  # multiply or screen, depending on destination
+    # "???": skia.BlendMode.kModulate,  # product of premultiplied colors; darkens destination
+    "colorBurn": skia.BlendMode.kColorBurn,  # darken destination to reflect source
+    # "???": skia.BlendMode.kSrc,  # replaces destination
+    "plusLighter": skia.BlendMode.kPlus,  # sum of colors
+    "destinationIn": skia.BlendMode.kDstIn,  # destination trimmed by source
+    "destinationAtop": skia.BlendMode.kDstATop,  # destination inside source blended with source
+    "saturation": skia.BlendMode.kSaturation,  # saturation of source with hue and luminosity of destination
+    # "???": skia.BlendMode.kLastSeparableMode,  # last blend mode operating separately on components
+    "sourceAtop": skia.BlendMode.kSrcATop,  # source inside destination blended with destination
+    "sourceOut": skia.BlendMode.kSrcOut,  # source trimmed outside destination
+    # "???": skia.BlendMode.kLastCoeffMode,  # last porter duff blend mode
+    "normal": skia.BlendMode.kSrcOver,  # source over destination
+    "copy": skia.BlendMode.kSrcOver,  # source over destination
+    "colorDodge": skia.BlendMode.kColorDodge,  # brighten destination to reflect source
+    "darken": skia.BlendMode.kDarken,  # darker of source and destination
+    "luminosity": skia.BlendMode.kLuminosity,  # luminosity of source with hue and saturation of destination
+    "multiply": skia.BlendMode.kMultiply,  # multiply source with destination, darkening image
+    "lighten": skia.BlendMode.kLighten,  # lighter of source and destination
+    "color": skia.BlendMode.kColor,  # hue and saturation of source with luminosity of destination
+    "exclusion": skia.BlendMode.kExclusion,  # subtract darker from lighter with lower contrast
+}
+
 
 class TextStyle(_ImmutableContainer):
 
     fontSize = 10
     features = {}  # won't get mutated
     variations = {}  # won't get mutated
+    language = None
+    font = None
 
     def __init__(self, **properties):
         super().__init__(**properties)
@@ -195,13 +256,16 @@ class TextStyle(_ImmutableContainer):
     def _getTypefaceAndTTFont(fontNameOrPath):
         cacheKey = fontNameOrPath
         if cacheKey not in _fontCache:
-            fontNameOrPath = os.fspath(fontNameOrPath)
-            if not os.path.exists(fontNameOrPath):
-                typeface = skia.Typeface(fontNameOrPath)
+            if fontNameOrPath is None:
+                typeface = skia.Typeface(None)
             else:
-                typeface = skia.Typeface.MakeFromFile(fontNameOrPath)
-                if typeface is None:
-                    raise DrawbotError(f"can't load font: {fontNameOrPath}")
+                fontNameOrPath = os.fspath(fontNameOrPath)
+                if not os.path.exists(fontNameOrPath):
+                    typeface = skia.Typeface(fontNameOrPath)
+                else:
+                    typeface = skia.Typeface.MakeFromFile(fontNameOrPath)
+                    if typeface is None:
+                        raise DrawbotError(f"can't load font: {fontNameOrPath}")
             ttFont = makeTTFontFromSkiaTypeface(typeface)
             _fontCache[cacheKey] = typeface, ttFont
         return _fontCache[cacheKey]
@@ -247,6 +311,7 @@ class TextStyle(_ImmutableContainer):
                 flippedCanvas=True,
                 features=self.features,
                 variations=self.variations,
+                language=self.language,
             )
             if glyphsInfo is None:
                 glyphsInfo = runInfo
@@ -258,6 +323,23 @@ class TextStyle(_ImmutableContainer):
             startPos = runInfo.endPos
         glyphsInfo.baseLevel = baseLevel
         return glyphsInfo
+
+    def alignGlyphPositions(self, glyphsInfo, align):
+        textWidth = glyphsInfo.endPos[0]
+        if align is None:
+            align = "left" if not glyphsInfo.baseLevel else "right"
+        xOffset = 0
+        if align == "right":
+            xOffset = -textWidth
+        elif align == "center":
+            xOffset = -textWidth / 2
+        glyphsInfo.positions = [(x + xOffset, y) for x, y in glyphsInfo.positions]
+
+    def makeTextBlob(self, glyphsInfo, align):
+        self.alignGlyphPositions(glyphsInfo, align)
+        builder = skia.TextBlobBuilder()
+        builder.allocRunPos(self.skFont, glyphsInfo.gids, glyphsInfo.positions)
+        return builder.make()
 
 
 # Font cache dict
